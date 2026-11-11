@@ -1,0 +1,139 @@
+name: Produce video (AI agent)
+
+# Runs OpenMontage the way it is meant to be run: Claude Code reads the pipeline
+# manifests + director skills and drives the production end to end, headless, on a runner.
+# Needs one repository secret: ANTHROPIC_API_KEY. Everything else stays zero-key
+# (Piper narration, open/stock footage, Remotion templated composition) unless you add
+# more provider keys as secrets and list them in `env` below.
+# Output: final mp4 + stage artifacts + the agent transcript, as a workflow artifact and a Release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "What to make (plain language)"
+        required: true
+        default: "Make a 45-second animated explainer about how the Northern Lights form."
+      project:
+        description: "Project id (kebab-case, becomes projects/<id>/)"
+        required: true
+        default: northern-lights
+      max_turns:
+        description: "Agent turn budget"
+        required: false
+        default: "200"
+      openmontage_ref:
+        description: "OpenMontage git ref (branch, tag or SHA)"
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Optional provider keys. Add the secret, then uncomment the line.
+      # FAL_KEY: ${{ secrets.FAL_KEY }}
+      # GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      # ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      # PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      # PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+      # UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+    steps:
+      - name: Check secret
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Repository secret ANTHROPIC_API_KEY is not set. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Fetch OpenMontage
+        run: git clone --depth 1 --branch "${{ inputs.openmontage_ref }}" https://github.com/calesthio/OpenMontage.git om
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: om/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: System packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Python dependencies
+        run: python -m pip install -q -r om/requirements.txt piper-tts
+
+      - name: Piper voice
+        working-directory: om
+        run: python -m piper.download_voices en_US-lessac-medium
+
+      - name: Remotion dependencies
+        working-directory: om/remotion-composer
+        run: |
+          npm install --no-audit --no-fund
+          npx remotion browser ensure
+
+      - name: Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Produce
+        working-directory: om
+        env:
+          USER_PROMPT: ${{ inputs.prompt }}
+          PROJECT_ID: ${{ inputs.project }}
+        run: |
+          cp .env.example .env
+          read -r -d '' TASK <<EOF || true
+          You are running headless on a CI runner. There is no human to answer questions, so:
+          - treat every checkpoint and approval gate as approved and continue;
+          - wherever the guide says to present options and wait, pick your own recommended option and record it in the decision log as required;
+          - no paid provider is available unless its key is present in the environment; default to zero-key tools (piper_tts narration, open/stock footage, Remotion templated composition);
+          - do not open the Backlot board;
+          - the project id is "$PROJECT_ID"; write everything under projects/$PROJECT_ID/ and finish with projects/$PROJECT_ID/renders/final.mp4;
+          - when the render exists, print the line FINAL: projects/$PROJECT_ID/renders/final.mp4 and stop.
+
+          Request: $USER_PROMPT
+          EOF
+          claude -p "$TASK" \
+            --dangerously-skip-permissions \
+            --max-turns "${{ inputs.max_turns }}" \
+            --output-format text | tee ../agent.log
+
+      - name: Collect outputs
+        run: |
+          mkdir -p out
+          cp agent.log out/
+          if [ -d "om/projects/${{ inputs.project }}" ]; then
+            cp -r "om/projects/${{ inputs.project }}/artifacts" out/ 2>/dev/null || true
+            cp -r "om/projects/${{ inputs.project }}/renders"   out/ 2>/dev/null || true
+            cp "om/projects/${{ inputs.project }}/project.json" out/ 2>/dev/null || true
+          fi
+          ls -laR out | head -100
+          test -n "$(ls out/renders/*.mp4 2>/dev/null)" || { echo "::error::No mp4 was rendered. Read agent.log in the artifact."; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.project }}-${{ github.run_number }}
+          path: out
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.project }}-${{ github.run_number }}" out/renders/*.mp4 \
+            --title "${{ inputs.project }} #${{ github.run_number }}" \
+            --notes "$(printf 'Prompt: %s\n\nOpenMontage ref: %s\nRun: %s/%s/actions/runs/%s' "${{ inputs.prompt }}" "${{ inputs.openmontage_ref }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}")"

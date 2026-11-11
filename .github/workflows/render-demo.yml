@@ -1,0 +1,93 @@
+name: Render zero-key demo
+
+# Renders one of OpenMontage's checked-in Remotion demos on a GitHub runner.
+# No API keys involved: the demos are pure Remotion components (charts, titles, KPI cards).
+# Output: an mp4 as a workflow artifact AND attached to a GitHub Release (demo-<run number>).
+
+on:
+  workflow_dispatch:
+    inputs:
+      demo:
+        description: "Which demo to render"
+        required: true
+        default: world-in-numbers
+        type: choice
+        options:
+          - world-in-numbers
+          - code-to-screen
+          - focusflow-pitch
+          - all
+      openmontage_ref:
+        description: "OpenMontage git ref (branch, tag or SHA)"
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch OpenMontage
+        run: git clone --depth 1 --branch "${{ inputs.openmontage_ref }}" https://github.com/calesthio/OpenMontage.git om
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: om/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: System packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Python dependencies
+        run: python -m pip install -q -r om/requirements.txt piper-tts
+
+      - name: Remotion dependencies
+        working-directory: om/remotion-composer
+        run: |
+          npm install --no-audit --no-fund
+          npx remotion browser ensure
+
+      - name: Render
+        working-directory: om
+        run: |
+          if [ "${{ inputs.demo }}" = "all" ]; then
+            python render_demo.py
+          else
+            python render_demo.py "${{ inputs.demo }}"
+          fi
+          ls -la projects/demos/renders/
+
+      - name: Probe output
+        working-directory: om
+        run: |
+          for f in projects/demos/renders/*.mp4; do
+            echo "== $f"
+            ffprobe -v error -show_entries format=duration,size:stream=codec_name,width,height,r_frame_rate -of default=nw=1 "$f"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: renders-${{ github.run_number }}
+          path: om/projects/demos/renders/*.mp4
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "demo-${{ github.run_number }}" om/projects/demos/renders/*.mp4 \
+            --title "Demo render #${{ github.run_number }} (${{ inputs.demo }})" \
+            --notes "Zero-key OpenMontage demo render. OpenMontage ref: ${{ inputs.openmontage_ref }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
