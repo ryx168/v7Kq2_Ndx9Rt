@@ -16,6 +16,8 @@ on:
           - world-in-numbers
           - code-to-screen
           - focusflow-pitch
+          - animated-reel-20s
+          - stop-procrastinating-with-this-1-hack
           - all
       openmontage_ref:
         description: "OpenMontage git ref (branch, tag or SHA)"
