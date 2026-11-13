@@ -35,7 +35,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
+      # Either one works. CLAUDE_CODE_OAUTH_TOKEN comes from `claude setup-token` on a
+      # machine signed in to a Claude Pro/Max subscription; ANTHROPIC_API_KEY bills the API.
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       # Optional provider keys. Add the secret, then uncomment the line.
       # FAL_KEY: ${{ secrets.FAL_KEY }}
       # GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -46,10 +49,11 @@ jobs:
     steps:
       - name: Check secret
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::error::Repository secret ANTHROPIC_API_KEY is not set. Add it under Settings > Secrets and variables > Actions."
+          if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::Neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set as a repository secret. Add one under Settings > Secrets and variables > Actions."
             exit 1
           fi
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo "Auth: Claude subscription token"; else echo "Auth: Anthropic API key"; fi
 
       - uses: actions/checkout@v4
 

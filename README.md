@@ -7,7 +7,7 @@ Runs [OpenMontage](https://github.com/calesthio/OpenMontage) (AGPL-3.0, upstream
 | Workflow | Needs | What you get |
 |---|---|---|
 | **Render zero-key demo** | nothing | one of the three checked-in Remotion demos as an mp4 |
-| **Produce video (AI agent)** | `ANTHROPIC_API_KEY` secret | Claude Code drives the full OpenMontage pipeline from a plain-language prompt: research, script, scene plan, Piper narration, Remotion composition, final mp4 |
+| **Produce video (AI agent)** | one secret: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`, uses a Pro/Max subscription) or `ANTHROPIC_API_KEY` (API billing) | Claude Code drives the full OpenMontage pipeline from a plain-language prompt: research, script, scene plan, Piper narration, Remotion composition, final mp4 |
 
 Both attach the mp4 to the run as an artifact and publish it as a GitHub Release, so there is a stable download link per run.
 
